@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find c:Usersxichen6Documentsreposexp_readerclick_alarmclock_w_reweightz -name *.mp4)"
+    ]
+  }
+}

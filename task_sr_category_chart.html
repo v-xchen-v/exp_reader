@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Task Success Rates</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: #f5f5f3;
+    color: #1a1a1a;
+    padding: 2rem;
+    min-height: 100vh;
+  }
+  h1 {
+    font-size: 18px;
+    font-weight: 500;
+    margin-bottom: 1.5rem;
+    color: #1a1a1a;
+  }
+  .metrics {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 1.5rem;
+    flex-wrap: wrap;
+  }
+  .metric-card {
+    background: #fff;
+    border-radius: 8px;
+    border: 0.5px solid rgba(0,0,0,0.12);
+    padding: 1rem 1.25rem;
+    flex: 1;
+    min-width: 130px;
+  }
+  .metric-card .label {
+    font-size: 12px;
+    color: #888;
+    margin-bottom: 4px;
+  }
+  .metric-card .value {
+    font-size: 22px;
+    font-weight: 500;
+  }
+  .metric-card .value.green { color: #3B6D11; }
+  .metric-card .value.amber { color: #854F0B; }
+  .metric-card .value.red   { color: #A32D2D; }
+  .legend {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 12px;
+    font-size: 12px;
+    color: #666;
+    flex-wrap: wrap;
+  }
+  .legend span {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    flex-shrink: 0;
+  }
+  .chart-wrapper {
+    background: #fff;
+    border-radius: 12px;
+    border: 0.5px solid rgba(0,0,0,0.1);
+    padding: 1.5rem;
+  }
+  .chart-canvas-container {
+    position: relative;
+    width: 100%;
+  }
+
+  /* file drop zone */
+  .drop-zone {
+    border: 1.5px dashed rgba(0,0,0,0.2);
+    border-radius: 8px;
+    padding: 1.5rem;
+    text-align: center;
+    font-size: 13px;
+    color: #888;
+    margin-bottom: 1.5rem;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .drop-zone:hover, .drop-zone.drag-over {
+    background: #f0f0ec;
+  }
+  .drop-zone input { display: none; }
+  .drop-zone strong { color: #444; }
+</style>
+</head>
+<body>
+
+<h1 id="page-title">Task success rates</h1>
+
+<div class="drop-zone" id="dropZone">
+  <input type="file" id="fileInput" accept=".json">
+  Drop your <strong>result.json</strong> here, or <strong>click to browse</strong>
+</div>
+
+<div id="dashboard" style="display:none;">
+  <div class="metrics" id="metrics"></div>
+  <div class="legend">
+    <span><span class="legend-dot" style="background:#E24B4A;"></span>below 50%</span>
+    <span><span class="legend-dot" style="background:#EF9F27;"></span>50–79%</span>
+    <span><span class="legend-dot" style="background:#639922;"></span>80%+</span>
+    <span><span class="legend-dot" style="background:#378ADD; border-radius:1px; height:3px; width:18px;"></span>overall avg</span>
+  </div>
+  <div class="chart-wrapper">
+    <div class="chart-canvas-container" id="canvasContainer">
+      <canvas id="taskChart"></canvas>
+    </div>
+  </div>
+</div>
+
+<script>
+let chartInstance = null;
+
+function getColor(v) {
+  if (v >= 80) return '#639922';
+  if (v >= 50) return '#EF9F27';
+  return '#E24B4A';
+}
+
+function extractStep(folder) {
+  if (!folder) return '';
+  const m = folder.match(/step=(\d+)/);
+  return m ? parseInt(m[1]).toLocaleString() + ' steps' : '';
+}
+
+function renderDashboard(data) {
+  const overall = data.overall_success_rate;
+  const tasks = Object.entries(data.tasks)
+    .map(([name, v]) => ({ name, sr: v.success_rate * 100 }))
+    .sort((a, b) => a.sr - b.sr);
+
+  const nTotal = tasks.length;
+  const nGreen = tasks.filter(t => t.sr >= 80).length;
+  const nAmber = tasks.filter(t => t.sr >= 50 && t.sr < 80).length;
+  const nRed   = tasks.filter(t => t.sr < 50).length;
+
+  const stepLabel = extractStep(data.folder);
+  document.getElementById('page-title').textContent =
+    'Task success rates' + (stepLabel ? '  —  ' + stepLabel : '') +
+    '   |   ' + nTotal + ' tasks';
+
+  document.getElementById('metrics').innerHTML = `
+    <div class="metric-card">
+      <div class="label">overall SR</div>
+      <div class="value">${(overall * 100).toFixed(1)}%</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">tasks ≥ 80%</div>
+      <div class="value green">${nGreen} / ${nTotal}</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">50–79% (needs work)</div>
+      <div class="value amber">${nAmber} / ${nTotal}</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">tasks &lt; 50%</div>
+      <div class="value red">${nRed} / ${nTotal}</div>
+    </div>
+  `;
+
+  const labels = tasks.map(t => t.name.replace(/_/g, ' '));
+  const values = tasks.map(t => parseFloat(t.sr.toFixed(1)));
+  const colors = values.map(getColor);
+
+  const barHeight = 22;
+  const padding = 120;
+  const canvasH = nTotal * barHeight + padding;
+  document.getElementById('canvasContainer').style.height = canvasH + 'px';
+
+  if (chartInstance) chartInstance.destroy();
+
+  chartInstance = new Chart(document.getElementById('taskChart'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'success rate %',
+        data: values,
+        backgroundColor: colors,
+        borderRadius: 3,
+        barThickness: 14,
+      }]
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: { label: ctx => ctx.parsed.x.toFixed(1) + '%' }
+        },
+        annotation: {}
+      },
+      scales: {
+        x: {
+          min: 0, max: 105,
+          ticks: {
+            callback: v => v + '%',
+            font: { size: 11 },
+            color: '#888'
+          },
+          grid: { color: 'rgba(0,0,0,0.06)' }
+        },
+        y: {
+          ticks: { font: { size: 11 }, color: '#444' },
+          grid: { display: false }
+        }
+      }
+    },
+    plugins: [{
+      id: 'overallLine',
+      afterDraw(chart) {
+        const { ctx, chartArea, scales } = chart;
+        const x = scales.x.getPixelForValue(overall * 100);
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(x, chartArea.top);
+        ctx.lineTo(x, chartArea.bottom);
+        ctx.strokeStyle = '#378ADD';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([5, 4]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#378ADD';
+        ctx.font = '11px -apple-system, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText((overall * 100).toFixed(1) + '%', x, chartArea.top - 6);
+        ctx.restore();
+      }
+    }, {
+      id: 'valueLabels',
+      afterDatasetsDraw(chart) {
+        const { ctx, scales } = chart;
+        chart.getDatasetMeta(0).data.forEach((bar, i) => {
+          const val = values[i];
+          const x = scales.x.getPixelForValue(val) + 4;
+          const y = bar.y;
+          ctx.save();
+          ctx.fillStyle = '#555';
+          ctx.font = '10.5px -apple-system, sans-serif';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(val.toFixed(1) + '%', x, y);
+          ctx.restore();
+        });
+      }
+    }]
+  });
+
+  document.getElementById('dashboard').style.display = 'block';
+}
+
+function loadJSON(file) {
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const data = JSON.parse(e.target.result);
+      renderDashboard(data);
+    } catch {
+      alert('Invalid JSON file.');
+    }
+  };
+  reader.readAsText(file);
+}
+
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+
+dropZone.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', e => { if (e.target.files[0]) loadJSON(e.target.files[0]); });
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  if (e.dataTransfer.files[0]) loadJSON(e.dataTransfer.files[0]);
+});
+</script>
+</body>
+</html>

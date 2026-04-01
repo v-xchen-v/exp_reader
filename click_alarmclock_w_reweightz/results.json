@@ -1,0 +1,14 @@
+{
+  "folder": "/home/xichen6/Documents/repos/CogACT/third_party/robotwin/logs/2026-03-26/exp_0317_robotwin_all_task_clean50_wo_randomized_fixed_paligemma_processor_and_post_processor_norm_zbetadot5",
+  "total_tasks": 1,
+  "total_rollouts": 36,
+  "total_successes": 13,
+  "tasks": {
+    "click_alarmclock": {
+      "rollout_num": 36,
+      "success_num": 13,
+      "success_rate": 0.3611
+    }
+  },
+  "overall_success_rate": 0.3611
+}
