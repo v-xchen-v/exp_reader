@@ -19,21 +19,23 @@ PORT = 8765
 def get_episodes(folder: Path):
     """Return dict of {episode_id: {mp4, summary}} for a folder.
 
-    Auto-detects the file prefix (e.g. click_alarmclock) from mp4 filenames.
+    Recursively searches for mp4 files matching *_ep*_*.mp4.
+    Stores the path relative to *folder* so the HTTP handler can serve them.
     """
     episodes = {}
-    for mp4 in folder.glob("*_ep*_*.mp4"):
+    for mp4 in folder.rglob("*_ep*_*.mp4"):
         m = re.match(r"(.+)_ep(\d+)_", mp4.name)
         if not m:
             continue
         prefix = m.group(1)
         ep_id = int(m.group(2))
-        summary_path = folder / f"{prefix}_ep{ep_id}_summary.json"
+        summary_path = mp4.parent / f"{prefix}_ep{ep_id}_summary.json"
         summary = {}
         if summary_path.exists():
             with open(summary_path) as f:
                 summary = json.load(f)
-        episodes[ep_id] = {"mp4": mp4.name, "summary": summary}
+        rel = mp4.relative_to(folder).as_posix()
+        episodes[ep_id] = {"mp4": rel, "summary": summary}
     return episodes
 
 
@@ -239,13 +241,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(content)
 
         elif path.startswith("/videos/1/"):
-            fname = path[len("/videos/1/"):]
-            fpath = DIR1 / fname
+            rel = path[len("/videos/1/"):]
+            fpath = (DIR1 / Path(rel)).resolve()
+            if not str(fpath).startswith(str(DIR1)):
+                self.send_response(403)
+                self.end_headers()
+                return
             self._serve_file(fpath, "video/mp4")
 
         elif path.startswith("/videos/2/"):
-            fname = path[len("/videos/2/"):]
-            fpath = DIR2 / fname
+            rel = path[len("/videos/2/"):]
+            fpath = (DIR2 / Path(rel)).resolve()
+            if not str(fpath).startswith(str(DIR2)):
+                self.send_response(403)
+                self.end_headers()
+                return
             self._serve_file(fpath, "video/mp4")
 
         else:
