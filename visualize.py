@@ -10,6 +10,8 @@ import json
 import re
 import http.server
 import threading
+import time
+import urllib.parse
 import webbrowser
 from pathlib import Path
 
@@ -52,14 +54,30 @@ def parse_args():
 args = parse_args()
 DIR1 = args.folder1.resolve()
 DIR2 = args.folder2.resolve()
-LABEL1 = args.label1 or DIR1.name
-LABEL2 = args.label2 or DIR2.name
+def make_label(d: Path) -> str:
+    """Use folder name, but if both share the same name, prepend ancestor info."""
+    return d.name
+
+LABEL1 = args.label1 or make_label(DIR1)
+LABEL2 = args.label2 or make_label(DIR2)
+# If labels collide, prepend distinguishing ancestor path segments
+if LABEL1 == LABEL2:
+    # Walk up until ancestors differ
+    parts1, parts2 = list(DIR1.parts), list(DIR2.parts)
+    for p1, p2 in zip(reversed(parts1), reversed(parts2)):
+        if p1 != p2:
+            LABEL1 = f"{p1}/{DIR1.name}"
+            LABEL2 = f"{p2}/{DIR2.name}"
+            break
 PORT = args.port
 
 eps1 = get_episodes(DIR1)
 eps2 = get_episodes(DIR2)
 
 common_eps = sorted(set(eps1) & set(eps2))
+
+# Cache-busting token unique to this server session
+CACHE_BUST = str(int(time.time()))
 
 
 def build_html():
@@ -73,13 +91,13 @@ def build_html():
         d2 = eps2[ep]
         pairs_json[ep] = {
             "left": {
-                "mp4": f"/videos/1/{d1['mp4']}",
+                "mp4": f"/videos/1/{d1['mp4']}?v={CACHE_BUST}",
                 "success": d1["summary"].get("success"),
                 "steps": d1["summary"].get("steps"),
                 "duration": round(d1["summary"].get("duration_sec", 0), 1),
             },
             "right": {
-                "mp4": f"/videos/2/{d2['mp4']}",
+                "mp4": f"/videos/2/{d2['mp4']}?v={CACHE_BUST}",
                 "success": d2["summary"].get("success"),
                 "steps": d2["summary"].get("steps"),
                 "duration": round(d2["summary"].get("duration_sec", 0), 1),
@@ -237,11 +255,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", len(content))
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+            self.send_header("Pragma", "no-cache")
             self.end_headers()
             self.wfile.write(content)
 
         elif path.startswith("/videos/1/"):
-            rel = path[len("/videos/1/"):]
+            rel = urllib.parse.unquote(path[len("/videos/1/"):])
             fpath = (DIR1 / Path(rel)).resolve()
             if not str(fpath).startswith(str(DIR1)):
                 self.send_response(403)
@@ -250,13 +270,34 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._serve_file(fpath, "video/mp4")
 
         elif path.startswith("/videos/2/"):
-            rel = path[len("/videos/2/"):]
+            rel = urllib.parse.unquote(path[len("/videos/2/"):])
             fpath = (DIR2 / Path(rel)).resolve()
             if not str(fpath).startswith(str(DIR2)):
                 self.send_response(403)
                 self.end_headers()
                 return
             self._serve_file(fpath, "video/mp4")
+
+        elif path == "/debug":
+            # Debug endpoint: show actual file paths being used
+            debug_info = {
+                "DIR1": str(DIR1),
+                "DIR2": str(DIR2),
+                "LABEL1": LABEL1,
+                "LABEL2": LABEL2,
+                "eps1_count": len(eps1),
+                "eps2_count": len(eps2),
+                "common_count": len(common_eps),
+                "sample_eps1": {k: {"mp4": v["mp4"], "full_path": str(DIR1 / v["mp4"])} for k in list(eps1)[:3] for v in [eps1[k]]},
+                "sample_eps2": {k: {"mp4": v["mp4"], "full_path": str(DIR2 / v["mp4"])} for k in list(eps2)[:3] for v in [eps2[k]]},
+                "dirs_are_same": str(DIR1) == str(DIR2),
+            }
+            content = json.dumps(debug_info, indent=2).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", len(content))
+            self.end_headers()
+            self.wfile.write(content)
 
         else:
             self.send_response(404)
@@ -280,6 +321,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
             self.send_header("Content-Length", length)
             self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
             self.end_headers()
             with open(fpath, "rb") as f:
                 f.seek(start)
@@ -289,6 +331,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", size)
             self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
             self.end_headers()
             with open(fpath, "rb") as f:
                 self.wfile.write(f.read())
@@ -298,8 +341,20 @@ if __name__ == "__main__":
     print(f"Folder 1 ({LABEL1}): {DIR1}  ({len(eps1)} episodes)")
     print(f"Folder 2 ({LABEL2}): {DIR2}  ({len(eps2)} episodes)")
     print(f"Common episodes: {len(common_eps)}  {common_eps[:5]}{'...' if len(common_eps) > 5 else ''}")
+    print(f"DIR1 == DIR2: {DIR1 == DIR2}")
+    if common_eps:
+        ep0 = common_eps[0]
+        print(f"  ep{ep0} left  -> {DIR1 / eps1[ep0]['mp4']}")
+        print(f"  ep{ep0} right -> {DIR2 / eps2[ep0]['mp4']}")
+        print(f"  left  exists: {(DIR1 / eps1[ep0]['mp4']).exists()}")
+        print(f"  right exists: {(DIR2 / eps2[ep0]['mp4']).exists()}")
     print(f"Starting server at http://localhost:{PORT}")
-    server = http.server.HTTPServer(("localhost", PORT), Handler)
+    try:
+        server = http.server.HTTPServer(("localhost", PORT), Handler)
+    except OSError as e:
+        print(f"\nERROR: Could not start server on port {PORT}: {e}")
+        print("Is another instance already running? Kill it first or use --port to pick a different port.")
+        raise SystemExit(1)
     url = f"http://localhost:{PORT}"
     threading.Timer(0.5, lambda: webbrowser.open(url)).start()
     try:
